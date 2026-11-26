@@ -10,18 +10,19 @@ import org.springframework.web.servlet.HandlerMapping;
 
 @Component
 public class AccessLogFilter extends OncePerRequestFilter {
- public record Entry(Instant timestamp,String level,String method,String endpoint,int status,long durationMs,String correlationId){}
+ public record Entry(Instant timestamp,String level,String method,String endpoint,int status,long durationMs,String correlationId,String exceptionType){}
  private final Deque<Entry> entries=new ArrayDeque<>();
  @Override protected void doFilterInternal(HttpServletRequest req,HttpServletResponse res,FilterChain chain)throws ServletException,IOException{
   if(!req.getRequestURI().startsWith("/api/")||req.getRequestURI().startsWith("/api/support/")){chain.doFilter(req,res);return;}
   String id=UUID.randomUUID().toString();res.setHeader("X-Correlation-ID",id);
-  long start=System.nanoTime();boolean failed=true;
-  try{chain.doFilter(req,res);failed=false;}finally{
+  long start=System.nanoTime();boolean failed=true;String exceptionType=null;
+  try{chain.doFilter(req,res);failed=false;}catch(ServletException|IOException|RuntimeException e){Throwable cause=e;for(int i=0;i<8&&cause.getCause()!=null&&cause.getCause()!=cause;i++)cause=cause.getCause();exceptionType=cause.getClass().getName();throw e;}finally{
    int status=failed?500:res.getStatus();
+   if(exceptionType==null&&req.getAttribute("eimp.exceptionType") instanceof String type)exceptionType=type;
    Object pattern=req.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
    String method=req.getMethod();
    if(!Set.of("GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS").contains(method))method="OTHER";
-   append(new Entry(Instant.now(),status>=500?"ERROR":status>=400?"WARN":"INFO",method,pattern==null?"UNMATCHED":pattern.toString(),status,(System.nanoTime()-start)/1000000,id));
+   append(new Entry(Instant.now(),status>=500?"ERROR":status>=400?"WARN":"INFO",method,pattern==null?"UNMATCHED":pattern.toString(),status,(System.nanoTime()-start)/1000000,id,exceptionType));
   }
  }
  private synchronized void append(Entry e){entries.addFirst(e);while(entries.size()>2000)entries.removeLast();}
