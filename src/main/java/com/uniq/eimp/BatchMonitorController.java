@@ -12,6 +12,12 @@ public class BatchMonitorController {
  private static final List<String> STEPS=List.of("FILE_RECEIVE","VALIDATE","STAGING_LOAD","BUSINESS_PROCESS","RECONCILE","OUTBOUND_REPORT");
  private record Job(String id,String name,String dependency,String status,Instant updatedAt){}
  public record Run(String runId,String jobId,int attempt,Instant startedAt,Instant endedAt,Long durationSeconds,String status,String errorCode,String reason,int inputRecords,int processedRecords,int rejectedRecords,int pendingRecords){}
+ @org.springframework.beans.factory.annotation.Value("${EIMP_BATCH_SLA_SECONDS:60}") private long slaSeconds;
+ @GetMapping("/sla") public synchronized Map<String,Object> sla(HttpServletRequest request){
+ authorize(request);long limit=Math.max(1,slaSeconds);var now=Instant.now();var rows=new ArrayList<Map<String,Object>>();var runs=new ArrayList<Run>(active.values());runs.addAll(history);
+ for(var run:runs){long elapsed=run.durationSeconds()==null?Math.max(0,java.time.Duration.between(run.startedAt(),now).getSeconds()):run.durationSeconds();rows.add(Map.of("runId",run.runId(),"jobId",run.jobId(),"status",run.status(),"elapsedSeconds",elapsed,"slaSeconds",limit,"breached",elapsed>limit));}
+ return Map.of("simulation",true,"slaSeconds",limit,"runs",rows,"breaches",rows.stream().filter(row->Boolean.TRUE.equals(row.get("breached"))).count());
+ }
  private final Map<String,Run> active=new HashMap<>();
  private final Map<String,Integer> attempts=new HashMap<>();
  private final Deque<Run> history=new ArrayDeque<>();
