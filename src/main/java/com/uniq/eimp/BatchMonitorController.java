@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+@org.springframework.scheduling.annotation.EnableScheduling
 @RestController
 @RequestMapping("/api/support/batches")
 public class BatchMonitorController {
@@ -28,7 +29,8 @@ public class BatchMonitorController {
  private void authorize(HttpServletRequest request){var s=request.getSession(false);if(s==null||!(s.getAttribute("supportExpiry") instanceof Instant expiry)||!Instant.now().isBefore(expiry))throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);}
  @GetMapping public synchronized Map<String,Object> list(HttpServletRequest request){authorize(request);return Map.of("simulation",true,"jobs",List.copyOf(jobs.values()));}
  @PostMapping("/{id}/{action}") public synchronized Map<String,Object> action(@PathVariable String id,@PathVariable String action,HttpServletRequest request){
- authorize(request);var j=jobs.get(id);if(j==null)throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+ authorize(request);return transition(id,action);}
+ private Map<String,Object> transition(String id,String action){var j=jobs.get(id);if(j==null)throw new ResponseStatusException(HttpStatus.NOT_FOUND);
  String next=switch(action){
  case "start" -> {if(!Set.of("WAITING","FAILED","STOPPED").contains(j.status())||(!j.dependency().isEmpty()&&!"SUCCESS".equals(jobs.get(j.dependency()).status())))throw new ResponseStatusException(HttpStatus.CONFLICT,"Dependency or state not ready");yield "RUNNING";}
  case "success","fail","stop" -> {if(!"RUNNING".equals(j.status()))throw new ResponseStatusException(HttpStatus.CONFLICT,"Job must be running");yield switch(action){case "success"->"SUCCESS";case "fail"->"FAILED";default->"STOPPED";};}
@@ -38,4 +40,10 @@ public class BatchMonitorController {
  else{var run=active.remove(id);if(run!=null){int step=Integer.parseInt(id.substring(id.length()-2));String error="FAILED".equals(next)?List.of("SIM-FILE-MISSING","SIM-INVALID-FORMAT","SIM-DB-CONNECTION","SIM-PROCESSING","SIM-RECON-MISMATCH","SIM-PERMISSION").get(step-1):"";String reason=switch(next){case "FAILED"->List.of("Simulated missing inbound file; check source transfer and file path","Simulated invalid delimiter count; validate input format","Simulated database connection failure; check listener and connectivity","Simulated business validation failure; check input records and rules","Simulated reconciliation mismatch; compare source and processed totals","Simulated outbound permission denied; check directory ownership and permissions").get(step-1);case "STOPPED"->"Stopped by support operator";default->"Simulated execution completed";};history.addFirst(new Run(run.runId(),id,run.attempt(),run.startedAt(),updated.updatedAt(),Math.max(0,java.time.Duration.between(run.startedAt(),updated.updatedAt()).getSeconds()),next,error,reason,100,"SUCCESS".equals(next)?100:0,"FAILED".equals(next)&&step==2?10:0,"SUCCESS".equals(next)?0:("FAILED".equals(next)&&step==2?90:100)));while(history.size()>2000)history.removeLast();}}
  return Map.of("simulation",true,"job",updated);
  }
+ @org.springframework.beans.factory.annotation.Value("${EIMP_BATCH_AUTO_ENABLED:false}") private boolean autoEnabled;
+ private final Set<String> automatic=new HashSet<>();
+ @org.springframework.scheduling.annotation.Scheduled(cron="0 30 12 * * *",zone="Asia/Kolkata")
+ public synchronized void daily(){if(!autoEnabled||!active.isEmpty()||!automatic.isEmpty())return;for(var j:new ArrayList<>(jobs.values()))jobs.put(j.id(),new Job(j.id(),j.name(),j.dependency(),"WAITING",Instant.now()));for(int g=1;g<=5;g++){String id=id(g,1);transition(id,"start");automatic.add(id);}}
+ @org.springframework.scheduling.annotation.Scheduled(fixedDelay=5000)
+ public synchronized void advance(){if(!autoEnabled)return;for(String id:new ArrayList<>(automatic)){var j=jobs.get(id);if(!"RUNNING".equals(j.status())){automatic.remove(id);continue;}if(java.time.Duration.between(j.updatedAt(),Instant.now()).getSeconds()<5)continue;transition(id,"success");automatic.remove(id);int step=Integer.parseInt(id.substring(id.length()-2));if(step<6){String next=id.substring(0,id.length()-2)+String.format("%02d",step+1);if("WAITING".equals(jobs.get(next).status())){transition(next,"start");automatic.add(next);}}}}
 }
