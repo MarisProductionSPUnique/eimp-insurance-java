@@ -73,4 +73,5 @@ public class ClaimController {
         if(c==null || !c.customerId().equals(customer.customerId()) || !settlements.containsKey(id))throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         return settlements.get(id);
     }
+public synchronized Map<String,Object> businessSummary(){var counts=new TreeMap<String,Long>();for(var c:claims.values())counts.merge(c.status(),1L,Long::sum);return Map.of("total",claims.size(),"statuses",counts,"settlements",settlements.size(),"settlementAmount",settlements.values().stream().map(Settlement::amount).reduce(BigDecimal.ZERO,BigDecimal::add));}
 }
