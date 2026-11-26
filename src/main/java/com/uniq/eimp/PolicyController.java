@@ -15,8 +15,11 @@ public class PolicyController {
     private final Map<String,Policy> policies = new ConcurrentHashMap<>();
     private final CustomerController customers;
     private final ProductController products;
-    public PolicyController(CustomerController customers, ProductController products) {
-        this.customers = customers; this.products = products;
+    private final EmployeeController employees;
+    public record Decision(String policyId,String decision,String reason,String employee,Instant decidedAt) {}
+    private final Map<String,Decision> decisions=new ConcurrentHashMap<>();
+    public PolicyController(CustomerController customers, ProductController products, EmployeeController employees) {
+        this.customers = customers; this.products = products; this.employees=employees;
     }
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -39,5 +42,30 @@ public class PolicyController {
         var policy = policies.get(id);
         if(policy == null || !policy.customerId().equals(customer.customerId())) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Policy not found");
         return policy;
+    }
+
+    @GetMapping("/underwriting")
+    public List<Policy> underwriting(HttpServletRequest http){
+        employees.me(http);
+        return policies.values().stream().sorted(Comparator.comparing(Policy::createdAt).reversed()).toList();
+    }
+    public record DecisionRequest(String decision,String reason) {}
+    @PostMapping("/underwriting/{id}")
+    public synchronized Decision decide(@PathVariable String id,@RequestBody DecisionRequest input,HttpServletRequest http){
+        var employee=employees.me(http);
+        if(!"APPROVED".equals(input.decision()) && !"REJECTED".equals(input.decision())) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Invalid decision");
+        if(input.reason()==null || input.reason().isBlank() || input.reason().length()>500) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Reason required");
+        var p=policies.get(id);
+        if(p==null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        if(!"PENDING_UNDERWRITING".equals(p.status())) throw new ResponseStatusException(HttpStatus.CONFLICT,"Already decided");
+        var d=new Decision(id,input.decision(),input.reason().strip(),employee.username(),Instant.now());
+        policies.put(id,new Policy(p.policyId(),p.customerId(),p.productCode(),p.coverage(),p.age(),p.annualPremium(),input.decision(),p.createdAt()));
+        decisions.put(id,d);
+        return d;
+    }
+    @GetMapping("/underwriting/history")
+    public List<Decision> history(HttpServletRequest http){
+        employees.me(http);
+        return decisions.values().stream().sorted(Comparator.comparing(Decision::decidedAt).reversed()).toList();
     }
 }
