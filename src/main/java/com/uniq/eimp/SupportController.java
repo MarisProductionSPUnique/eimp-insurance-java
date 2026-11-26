@@ -16,6 +16,9 @@ public class SupportController {
  @Value("${EIMP_SUPPORT_USERNAME:support}") private String username;
  @Value("${EIMP_SUPPORT_PASSWORD:}") private String password;
  public record Login(String username,String password){}
+ private final ApiMetricsFilter apiMetrics;
+ public SupportController(ApiMetricsFilter apiMetrics){this.apiMetrics=apiMetrics;}
+ @GetMapping("/api-metrics") public java.util.List<Map<String,Object>> apiMetrics(HttpServletRequest request){authorize(request);return apiMetrics.snapshot();}
  private int failures;
  private Instant blocked=Instant.EPOCH;
  @PostMapping("/login")
