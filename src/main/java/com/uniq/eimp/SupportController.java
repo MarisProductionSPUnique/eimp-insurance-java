@@ -42,4 +42,27 @@ public class SupportController {
  @PostMapping("/logout")
  @ResponseStatus(HttpStatus.NO_CONTENT)
  public void logout(HttpServletRequest request){authorize(request);request.getSession(false).invalidate();}
+
+ @GetMapping("/metrics")
+ public Map<String,Object> metrics(HttpServletRequest request){
+  authorize(request);
+  var result=new java.util.LinkedHashMap<String,Object>();
+  var heap=ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+  var threads=ManagementFactory.getThreadMXBean();
+  result.put("heapUsedBytes",heap.getUsed());result.put("heapMaxBytes",heap.getMax());
+  result.put("heapCommittedBytes",heap.getCommitted());
+  result.put("threads",threads.getThreadCount());result.put("peakThreads",threads.getPeakThreadCount());
+  result.put("processors",Runtime.getRuntime().availableProcessors());
+  var os=ManagementFactory.getOperatingSystemMXBean();
+  if(os instanceof com.sun.management.OperatingSystemMXBean ext){
+   result.put("systemCpuPercent",percent(ext.getCpuLoad()));
+   result.put("processCpuPercent",percent(ext.getProcessCpuLoad()));
+   result.put("memoryTotalBytes",ext.getTotalMemorySize());
+   result.put("memoryFreeBytes",ext.getFreeMemorySize());
+  }
+  try{var fs=java.nio.file.Files.getFileStore(java.nio.file.Path.of("/"));result.put("diskTotalBytes",fs.getTotalSpace());result.put("diskUsableBytes",fs.getUsableSpace());}catch(java.io.IOException|SecurityException e){result.put("diskTotalBytes",null);result.put("diskUsableBytes",null);}
+  result.put("scope","JVM-visible runtime and filesystem; not physical host metrics");
+  result.put("timestamp",Instant.now().toString());return result;
+ }
+ private Double percent(double value){return value<0||!Double.isFinite(value)?null:Math.round(value*10000)/100.0;}
 }
