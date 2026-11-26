@@ -17,7 +17,9 @@ public class SupportController {
  @Value("${EIMP_SUPPORT_PASSWORD:}") private String password;
  public record Login(String username,String password){}
  private final ApiMetricsFilter apiMetrics;
- public SupportController(ApiMetricsFilter apiMetrics){this.apiMetrics=apiMetrics;}
+ private final AccessLogFilter accessLogs;
+ public SupportController(ApiMetricsFilter apiMetrics,AccessLogFilter accessLogs){this.apiMetrics=apiMetrics;this.accessLogs=accessLogs;}
+ @GetMapping("/logs") public java.util.List<AccessLogFilter.Entry> logs(HttpServletRequest request,@RequestParam(defaultValue="") String keyword,@RequestParam(defaultValue="") String level,@RequestParam(defaultValue="15") int minutes){authorize(request);return accessLogs.search(keyword,level,minutes);}
  @GetMapping("/api-metrics") public java.util.List<Map<String,Object>> apiMetrics(HttpServletRequest request){authorize(request);return apiMetrics.snapshot();}
  private int failures;
  private Instant blocked=Instant.EPOCH;
