@@ -11,6 +11,11 @@ public class BatchMonitorController {
  private static final List<String> GROUPS=List.of("CUSTOMER_POLICY","PREMIUM","CLAIMS","SETTLEMENT","RECON_REPORT");
  private static final List<String> STEPS=List.of("FILE_RECEIVE","VALIDATE","STAGING_LOAD","BUSINESS_PROCESS","RECONCILE","OUTBOUND_REPORT");
  private record Job(String id,String name,String dependency,String status,Instant updatedAt){}
+ public record Run(String runId,String jobId,int attempt,Instant startedAt,Instant endedAt,Long durationSeconds,String status,String errorCode,String reason){}
+ private final Map<String,Run> active=new HashMap<>();
+ private final Map<String,Integer> attempts=new HashMap<>();
+ private final Deque<Run> history=new ArrayDeque<>();
+ @GetMapping("/history") public synchronized List<Run> history(HttpServletRequest request){authorize(request);var result=new ArrayList<Run>(active.values());result.addAll(history);return result;}
  private final Map<String,Job> jobs=new LinkedHashMap<>();
  public BatchMonitorController(){for(int g=1;g<=5;g++)for(int j=1;j<=6;j++){String id=id(g,j);jobs.put(id,new Job(id,GROUPS.get(g-1)+"_"+STEPS.get(j-1),j==1?"":id(g,j-1),"WAITING",Instant.now()));}}
  private static String id(int g,int j){return "EIMP_BATCH_%02d_JOB_%02d".formatted(g,j);}
@@ -22,6 +27,9 @@ public class BatchMonitorController {
  case "start" -> {if(!Set.of("WAITING","FAILED","STOPPED").contains(j.status())||(!j.dependency().isEmpty()&&!"SUCCESS".equals(jobs.get(j.dependency()).status())))throw new ResponseStatusException(HttpStatus.CONFLICT,"Dependency or state not ready");yield "RUNNING";}
  case "success","fail","stop" -> {if(!"RUNNING".equals(j.status()))throw new ResponseStatusException(HttpStatus.CONFLICT,"Job must be running");yield switch(action){case "success"->"SUCCESS";case "fail"->"FAILED";default->"STOPPED";};}
  default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
- };var updated=new Job(j.id(),j.name(),j.dependency(),next,Instant.now());jobs.put(id,updated);return Map.of("simulation",true,"job",updated);
+ };var updated=new Job(j.id(),j.name(),j.dependency(),next,Instant.now());jobs.put(id,updated);
+ if("start".equals(action)){active.put(id,new Run("RUN-"+UUID.randomUUID(),id,attempts.merge(id,1,Integer::sum),updated.updatedAt(),null,null,"RUNNING","",""));}
+ else{var run=active.remove(id);if(run!=null){String error="FAILED".equals(next)?"SIM-BATCH-"+id.substring(id.length()-2):"";String reason=switch(next){case "FAILED"->"Simulated failure in "+j.name();case "STOPPED"->"Stopped by support operator";default->"Simulated execution completed";};history.addFirst(new Run(run.runId(),id,run.attempt(),run.startedAt(),updated.updatedAt(),Math.max(0,java.time.Duration.between(run.startedAt(),updated.updatedAt()).getSeconds()),next,error,reason));while(history.size()>2000)history.removeLast();}}
+ return Map.of("simulation",true,"job",updated);
  }
 }
