@@ -46,4 +46,5 @@ public class BatchMonitorController {
  public synchronized void daily(){if(!autoEnabled||!active.isEmpty()||!automatic.isEmpty())return;for(var j:new ArrayList<>(jobs.values()))jobs.put(j.id(),new Job(j.id(),j.name(),j.dependency(),"WAITING",Instant.now()));for(int g=1;g<=5;g++){String id=id(g,1);transition(id,"start");automatic.add(id);}}
  @org.springframework.scheduling.annotation.Scheduled(fixedDelay=5000)
  public synchronized void advance(){if(!autoEnabled)return;for(String id:new ArrayList<>(automatic)){var j=jobs.get(id);if(!"RUNNING".equals(j.status())){automatic.remove(id);continue;}if(java.time.Duration.between(j.updatedAt(),Instant.now()).getSeconds()<5)continue;transition(id,"success");automatic.remove(id);int step=Integer.parseInt(id.substring(id.length()-2));if(step<6){String next=id.substring(0,id.length()-2)+String.format("%02d",step+1);if("WAITING".equals(jobs.get(next).status())){transition(next,"start");automatic.add(next);}}}}
+ public synchronized List<Run> monitoringRuns(){var result=new ArrayList<Run>(active.values());result.addAll(history);return List.copyOf(result);}
 }
