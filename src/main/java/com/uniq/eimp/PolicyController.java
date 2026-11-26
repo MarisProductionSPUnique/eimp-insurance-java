@@ -68,4 +68,25 @@ public class PolicyController {
         employees.me(http);
         return decisions.values().stream().sorted(Comparator.comparing(Decision::decidedAt).reversed()).toList();
     }
+
+    public record Payment(String receiptId,String policyId,BigDecimal amount,String status,Instant paidAt) {}
+    private final Map<String,Payment> payments=new ConcurrentHashMap<>();
+    @PostMapping("/{id}/payment")
+    public synchronized Payment pay(@PathVariable String id,HttpServletRequest http){
+        var p=get(id,http);
+        var existing=payments.get(id);
+        if(existing!=null)return existing;
+        if(!"APPROVED".equals(p.status()))throw new ResponseStatusException(HttpStatus.CONFLICT,"Policy must be approved");
+        var receipt=new Payment("PAY-"+UUID.randomUUID(),id,p.annualPremium(),"SUCCESS",Instant.now());
+        payments.put(id,receipt);
+        policies.put(id,new Policy(p.policyId(),p.customerId(),p.productCode(),p.coverage(),p.age(),p.annualPremium(),"ACTIVE",p.createdAt()));
+        return receipt;
+    }
+    @GetMapping("/{id}/payment")
+    public synchronized Payment receipt(@PathVariable String id,HttpServletRequest http){
+        get(id,http);
+        var payment=payments.get(id);
+        if(payment==null)throw new ResponseStatusException(HttpStatus.NOT_FOUND,"No payment");
+        return payment;
+    }
 }
