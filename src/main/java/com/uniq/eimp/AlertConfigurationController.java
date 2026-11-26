@@ -23,4 +23,16 @@ public class AlertConfigurationController {
  @GetMapping public synchronized Map<String,Object> get(HttpServletRequest r){authorize(r);return Map.of("controls",controls,"rules",List.copyOf(rules.values()),"audit",List.copyOf(audit),"storage","IN_MEMORY","integrationReady",false);}
  @PutMapping("/controls") public synchronized Controls controls(@RequestBody Controls update,HttpServletRequest r){authorize(r);record("CONTROLS",controls,update);controls=update;return controls;}
  @PutMapping("/rules/{id}") public synchronized Rule update(@PathVariable String id,@RequestBody Update u,HttpServletRequest r){authorize(r);var old=rules.get(id);if(old==null)throw new ResponseStatusException(HttpStatus.NOT_FOUND);boolean percent=Set.of("CPU","MEMORY","DISK","HEAP").contains(id);if(!Double.isFinite(u.threshold())||u.threshold()<=0||u.threshold()>(percent?100:86400)||u.durationSeconds()<0||u.durationSeconds()>86400||u.priority()==null||!Set.of("P1","P2","P3","P4").contains(u.priority()))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Invalid rule configuration");var next=new Rule(id,old.name(),u.active(),u.threshold(),u.durationSeconds(),u.priority());record(id,old,next);rules.put(id,next);return next;}
+ private final Map<String,Instant> exceededSince=new HashMap<>();
+ private final Map<String,Map<String,Object>> evaluations=new LinkedHashMap<>();
+ @org.springframework.scheduling.annotation.Scheduled(fixedDelay=10000)
+ public synchronized void evaluateResources(){
+ var os=java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+ var heap=java.lang.management.ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+ if(os instanceof com.sun.management.OperatingSystemMXBean m){double cpu=m.getCpuLoad();evaluate("CPU",cpu<0?Double.NaN:cpu*100);long total=m.getTotalMemorySize();evaluate("MEMORY",total>0?100.0*(total-m.getFreeMemorySize())/total:Double.NaN);}
+ evaluate("HEAP",heap.getMax()>0?100.0*heap.getUsed()/heap.getMax():Double.NaN);
+ try{var fs=java.nio.file.Files.getFileStore(java.nio.file.Path.of("/"));long total=fs.getTotalSpace();evaluate("DISK",total>0?100.0*(total-fs.getUsableSpace())/total:Double.NaN);}catch(java.io.IOException e){evaluate("DISK",Double.NaN);}
+ }
+ private void evaluate(String id,double value){var rule=rules.get(id);var now=Instant.now();boolean known=Double.isFinite(value);boolean exceeded=known&&value>=rule.threshold();if(!exceeded)exceededSince.remove(id);else exceededSince.putIfAbsent(id,now);long seconds=exceeded?java.time.Duration.between(exceededSince.get(id),now).getSeconds():0;boolean alert=exceeded&&seconds>=rule.durationSeconds();var row=new LinkedHashMap<String,Object>();row.put("id",id);row.put("value",known?value:null);row.put("status",!known?"UNKNOWN":alert?"ALERT":exceeded?"PENDING":"NORMAL");row.put("durationSeconds",seconds);row.put("incidentEligible",alert&&rule.active()&&controls.enabled()&&!controls.maintenance());row.put("timestamp",now);evaluations.put(id,row);}
+ @GetMapping("/evaluations") public synchronized Map<String,Object> evaluations(HttpServletRequest r){authorize(r);return Map.of("scope","JVM-visible resources","incidentIntegration",false,"evaluations",List.copyOf(evaluations.values()));}
 }
