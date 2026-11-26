@@ -89,4 +89,5 @@ public class PolicyController {
         if(payment==null)throw new ResponseStatusException(HttpStatus.NOT_FOUND,"No payment");
         return payment;
     }
+public synchronized Map<String,Object> businessSummary(){var counts=new TreeMap<String,Long>();for(var p:policies.values())counts.merge(p.status(),1L,Long::sum);return Map.of("total",policies.size(),"statuses",counts,"payments",payments.size(),"premiumCollected",payments.values().stream().map(Payment::amount).reduce(BigDecimal.ZERO,BigDecimal::add));}
 }
