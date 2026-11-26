@@ -14,7 +14,8 @@ public class AlertConfigurationController {
  private Controls controls=new Controls(false,false);
  private final Map<String,Rule> rules=new LinkedHashMap<>();
  private final Deque<Map<String,Object>> audit=new ArrayDeque<>();
- public AlertConfigurationController(){
+ private final BatchMonitorController batches;
+ public AlertConfigurationController(BatchMonitorController batches){this.batches=batches;
  add("CPU","High CPU",90,300,"P2");add("MEMORY","High memory",90,300,"P2");add("DISK","Disk utilization",95,60,"P2");add("APP_DOWN","Application unavailable",1,60,"P1");add("DB_DOWN","Database disconnected",1,60,"P1");add("HEAP","JVM heap",90,300,"P2");add("HTTP_500","HTTP 500 errors",5,300,"P2");add("JAVA_EXCEPTION","Java exceptions",5,300,"P3");add("BATCH_FAILURE","Batch failure",1,0,"P2");add("BATCH_SLA","Batch SLA breach",60,0,"P3");add("PAYMENT_FAILURE","Payment failures",5,300,"P2");add("SETTLEMENT_FAILURE","Settlement failure",1,0,"P2");
  }
  private void add(String id,String name,double threshold,int duration,String priority){rules.put(id,new Rule(id,name,false,threshold,duration,priority));}
@@ -27,6 +28,7 @@ public class AlertConfigurationController {
  private final Map<String,Map<String,Object>> evaluations=new LinkedHashMap<>();
  @org.springframework.scheduling.annotation.Scheduled(fixedDelay=10000)
  public synchronized void evaluateResources(){
+ evaluateBatches();
  var os=java.lang.management.ManagementFactory.getOperatingSystemMXBean();
  var heap=java.lang.management.ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
  if(os instanceof com.sun.management.OperatingSystemMXBean m){double cpu=m.getCpuLoad();evaluate("CPU",cpu<0?Double.NaN:cpu*100);long total=m.getTotalMemorySize();evaluate("MEMORY",total>0?100.0*(total-m.getFreeMemorySize())/total:Double.NaN);}
@@ -35,4 +37,5 @@ public class AlertConfigurationController {
  }
  private void evaluate(String id,double value){var rule=rules.get(id);var now=Instant.now();boolean known=Double.isFinite(value);boolean exceeded=known&&value>=rule.threshold();if(!exceeded)exceededSince.remove(id);else exceededSince.putIfAbsent(id,now);long seconds=exceeded?java.time.Duration.between(exceededSince.get(id),now).getSeconds():0;boolean alert=exceeded&&seconds>=rule.durationSeconds();var row=new LinkedHashMap<String,Object>();row.put("id",id);row.put("value",known?value:null);row.put("status",!known?"UNKNOWN":alert?"ALERT":exceeded?"PENDING":"NORMAL");row.put("durationSeconds",seconds);row.put("incidentEligible",alert&&rule.active()&&controls.enabled()&&!controls.maintenance());row.put("timestamp",now);evaluations.put(id,row);}
  @GetMapping("/evaluations") public synchronized Map<String,Object> evaluations(HttpServletRequest r){authorize(r);return Map.of("scope","JVM-visible resources","incidentIntegration",false,"evaluations",List.copyOf(evaluations.values()));}
+ private void evaluateBatches(){var now=Instant.now();var runs=batches.monitoringRuns();var latest=new HashMap<String,BatchMonitorController.Run>();for(var run:runs)latest.merge(run.jobId(),run,(a,b)->a.startedAt().isAfter(b.startedAt())?a:b);long failures=latest.values().stream().filter(x->"FAILED".equals(x.status())).count();long max=latest.values().stream().mapToLong(x->x.durationSeconds()==null?Math.max(0,java.time.Duration.between(x.startedAt(),now).getSeconds()):x.durationSeconds()).max().orElse(0);evaluate("BATCH_FAILURE",failures);evaluate("BATCH_SLA",max);}
 }
