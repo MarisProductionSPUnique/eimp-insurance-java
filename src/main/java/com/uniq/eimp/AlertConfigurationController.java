@@ -16,7 +16,8 @@ public class AlertConfigurationController {
  private final Deque<Map<String,Object>> audit=new ArrayDeque<>();
  private final BatchMonitorController batches;
  private final AccessLogFilter logs;
- public AlertConfigurationController(BatchMonitorController batches,AccessLogFilter logs){this.batches=batches;this.logs=logs;
+ private final BusinessFailureSimulator business;
+ public AlertConfigurationController(BatchMonitorController batches,AccessLogFilter logs,BusinessFailureSimulator business){this.batches=batches;this.logs=logs;this.business=business;
  add("CPU","High CPU",90,300,"P2");add("MEMORY","High memory",90,300,"P2");add("DISK","Disk utilization",95,60,"P2");add("APP_DOWN","Application unavailable",1,60,"P1");add("DB_DOWN","Database disconnected",1,60,"P1");add("HEAP","JVM heap",90,300,"P2");add("HTTP_500","HTTP 500 errors",5,300,"P2");add("JAVA_EXCEPTION","Java exceptions",5,300,"P3");add("BATCH_FAILURE","Batch failure",1,0,"P2");add("BATCH_SLA","Batch SLA breach",60,0,"P3");add("PAYMENT_FAILURE","Payment failures",5,300,"P2");add("SETTLEMENT_FAILURE","Settlement failure",1,0,"P2");
  }
  private void add(String id,String name,double threshold,int duration,String priority){rules.put(id,new Rule(id,name,false,threshold,duration,priority));}
@@ -29,7 +30,7 @@ public class AlertConfigurationController {
  private final Map<String,Map<String,Object>> evaluations=new LinkedHashMap<>();
  @org.springframework.scheduling.annotation.Scheduled(fixedDelay=10000)
  public synchronized void evaluateResources(){
- evaluateBatches();evaluateLogs();
+ evaluateBatches();evaluateLogs();evaluateBusiness();
  var os=java.lang.management.ManagementFactory.getOperatingSystemMXBean();
  var heap=java.lang.management.ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
  if(os instanceof com.sun.management.OperatingSystemMXBean m){double cpu=m.getCpuLoad();evaluate("CPU",cpu<0?Double.NaN:cpu*100);long total=m.getTotalMemorySize();evaluate("MEMORY",total>0?100.0*(total-m.getFreeMemorySize())/total:Double.NaN);}
@@ -40,4 +41,5 @@ public class AlertConfigurationController {
  @GetMapping("/evaluations") public synchronized Map<String,Object> evaluations(HttpServletRequest r){authorize(r);return Map.of("scope","JVM-visible resources","incidentIntegration",false,"evaluations",List.copyOf(evaluations.values()));}
  private void evaluateBatches(){var now=Instant.now();var runs=batches.monitoringRuns();var latest=new HashMap<String,BatchMonitorController.Run>();for(var run:runs)latest.merge(run.jobId(),run,(a,b)->a.startedAt().isAfter(b.startedAt())?a:b);long failures=latest.values().stream().filter(x->"FAILED".equals(x.status())).count();long max=latest.values().stream().mapToLong(x->x.durationSeconds()==null?Math.max(0,java.time.Duration.between(x.startedAt(),now).getSeconds()):x.durationSeconds()).max().orElse(0);evaluate("BATCH_FAILURE",failures);evaluate("BATCH_SLA",max);}
  private void evaluateLogs(){for(String id:List.of("HTTP_500","JAVA_EXCEPTION")){var rule=rules.get(id);int window=Math.max(1,rule.durationSeconds());var cutoff=Instant.now().minusSeconds(window);long count=logs.search("","",Math.min(1440,(window+59)/60)).stream().filter(x->!x.timestamp().isBefore(cutoff)).filter(x->id.equals("HTTP_500")?x.status()==500:x.exceptionType()!=null).count();var row=new LinkedHashMap<String,Object>();boolean alert=count>=rule.threshold();row.put("id",id);row.put("value",count);row.put("status",alert?"ALERT":"NORMAL");row.put("durationSeconds",window);row.put("incidentEligible",alert&&rule.active()&&controls.enabled()&&!controls.maintenance());row.put("timestamp",Instant.now());evaluations.put(id,row);}}
+ private void evaluateBusiness(){for(String id:List.of("PAYMENT_FAILURE","SETTLEMENT_FAILURE")){var rule=rules.get(id);int window=rule.durationSeconds()==0?60:rule.durationSeconds();long count=business.count(id.equals("PAYMENT_FAILURE")?"payment":"settlement",window);boolean alert=count>=rule.threshold();var row=new LinkedHashMap<String,Object>();row.put("id",id);row.put("value",count);row.put("status",alert?"ALERT":"NORMAL");row.put("durationSeconds",window);row.put("incidentEligible",alert&&rule.active()&&controls.enabled()&&!controls.maintenance());row.put("timestamp",Instant.now());evaluations.put(id,row);}}
 }
