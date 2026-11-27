@@ -1,0 +1,33 @@
+name: Dashboard validation
+on:
+  push:
+    branches: [feature/itsm-workspace-guides]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          python3 - <<'PY'
+          import pathlib,re,json,subprocess,tempfile
+          root=pathlib.Path('src/main/resources/static')
+          d=(root/'application-dashboard.html').read_text()
+          g=(root/'functionality-guide.html').read_text()
+          rows=json.loads(re.search(r'const data=(.*?);const access=',d,re.S)[1])
+          access=json.loads(re.search(r'const access=(.*?);function render',d,re.S)[1])
+          guides=json.loads(re.search(r'const guides=(.*?);const g=',g,re.S)[1])
+          assert len(rows)==len(access)==len(set(r[3] for r in rows))
+          assert all(r[3] in guides or r[3] in ('https://ibs-banking-webserver.onrender.com','https://ibs-banking-appserver.onrender.com') for r in rows)
+          for page in (d,g):
+              for script in re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',page,re.S|re.I):
+                  with tempfile.NamedTemporaryFile(suffix='.js',mode='w') as f:
+                      f.write(script);f.flush()
+                      subprocess.run(['node','--check',f.name],check=True)
+          PY
